@@ -10,6 +10,18 @@ namespace kvforge {
 
 class Connection {
 public:
+    // Resource limits per client connection
+    static constexpr size_t MAX_QUERY_BUF_SIZE = 128 * 1024 * 1024; // 128 MiB
+    static constexpr size_t MAX_OUTPUT_BUF_SIZE = 64 * 1024 * 1024;  // 64 MiB
+    static constexpr size_t BUFFER_SHRINK_THRESHOLD = 64 * 1024;    // 64 KiB
+
+    bool is_output_buf_exceeded() const {
+        return write_buf_.size() > MAX_OUTPUT_BUF_SIZE;
+    }
+
+    bool is_query_buf_exceeded() const {
+        return read_buf_.size() > MAX_QUERY_BUF_SIZE;
+    }
     explicit Connection(int fd);
     ~Connection();
 
@@ -43,7 +55,7 @@ public:
 
     // Read and Write methods over non-blocking socket
     // Returns: > 0 (bytes transferred), 0 (connection closed by peer), -1 (EAGAIN or error)
-    ssize_t read_from_socket(std::string& out_err);
+    ssize_t read_from_socket(std::string& out_err,size_t max_bytes=64*1024);
     ssize_t write_to_socket(std::string& out_err);
 
 private:

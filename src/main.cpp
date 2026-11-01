@@ -1,5 +1,6 @@
 #include "config/config.hpp"
 #include "util/log.hpp"
+#include <sys/resource.h>
 #include "net/listener.hpp"
 #include "net/event_loop.hpp"
 #include "commands/command_table.hpp"
@@ -24,6 +25,24 @@ int main(int argc, char* argv[]) {
 
     // Set the logging level chosen by the user
     kvforge::set_log_level(config.log_level);
+
+        // Check and adjust OS file descriptor limits (RLIMIT_NOFILE)
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) == 0) {
+        rlim_t needed = static_cast<rlim_t>(config.max_clients) + 32;
+        if (limit.rlim_cur < needed) {
+            rlim_t old_limit = limit.rlim_cur;
+            limit.rlim_cur = std::min(needed, limit.rlim_max);
+            if (setrlimit(RLIMIT_NOFILE, &limit) == 0) {
+                kvforge::log_info("Increased file descriptor limit from " + 
+                                  std::to_string(old_limit) + " to " + std::to_string(limit.rlim_cur));
+            } else {
+                kvforge::log_warn("File descriptor limit (" + std::to_string(limit.rlim_cur) + 
+                                  ") is below max_clients (" + std::to_string(config.max_clients) + 
+                                  "). Run 'ulimit -n " + std::to_string(needed) + "' to raise it.");
+            }
+        }
+    }
 
     kvforge::log_info("KVForge v0.1.0 starting");
     // 1. Initialize Server Context & Command Table

@@ -137,8 +137,8 @@ ParseResult RespParser::parse_resp_array(const char* data, size_t len, Command& 
     }
 
     if (static_cast<size_t>(element_count) > MAX_ARRAY_ELEMENTS) {
-        return {ParseStatus::ERROR, 0, "Protocol error: multibulk length exceeds limit"};
-    }
+    return {ParseStatus::ERROR, 0, "Protocol error: invalid multibulk length"};
+}
 
     const char* p = crlf + 2; // Advance past "*<count>\r\n"
 
@@ -173,9 +173,9 @@ ParseResult RespParser::parse_resp_array(const char* data, size_t len, Command& 
             continue;
         }
 
-        if (static_cast<size_t>(str_len) > MAX_BULK_STRING_LENGTH) {
-            return {ParseStatus::ERROR, 0, "Protocol error: bulk string exceeds max length"};
-        }
+       if (static_cast<size_t>(str_len) > MAX_BULK_STRING_LENGTH) {
+    return {ParseStatus::ERROR, 0, "Protocol error: invalid bulk length"};
+}
 
         const char* payload_start = next_crlf + 2;
         const char* payload_end = payload_start + str_len;

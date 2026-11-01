@@ -175,39 +175,61 @@ void EventLoop::handle_connection_read(int fd) {
     std::string err;
     ssize_t n = conn->read_from_socket(err);
 
-    if (n == 0) {
-        // EOF: Client disconnected cleanly
+    if (n < 0) {
+        log_warn("Read error on fd=" + std::to_string(fd) + ": " + err);
         close_connection(fd);
         return;
-    } else if (n < 0) {
-        log_warn("Connection error on fd=" + std::to_string(fd) + ": " + err);
+    } else if (n == 0) {
+        // Client closed the connection cleanly
         close_connection(fd);
         return;
     }
 
-    // Parse and dispatch all complete commands in read_buf_ (supports pipelining!)
-    while (!conn->read_buf().empty()) {
+    // 1. Guard against Query Buffer Flooding (PRD §5.3: 128 MiB max)
+    if (conn->is_query_buf_exceeded()) {
+        log_warn("Query buffer limit exceeded on fd=" + std::to_string(fd));
+        conn->append_write("-ERR Protocol error: query buffer limit exceeded\r\n");
+        conn->set_close_after_write(true);
+        conn->write_to_socket(err);
+        if (conn->has_pending_write()) {
+            update_connection_events(fd, EPOLLIN | EPOLLOUT);
+        } else {
+            close_connection(fd);
+        }
+        return;
+    }
+
+    // 2. Parse and dispatch complete commands with fairness cap (max 1000 per iteration)
+    static constexpr size_t MAX_COMMANDS_PER_ITERATION = 1000;
+    size_t commands_processed = 0;
+
+    while (!conn->read_buf().empty() && commands_processed < MAX_COMMANDS_PER_ITERATION) {
         Command cmd;
         ParseResult res = RespParser::parse(conn->read_buf().data(), conn->read_buf().size(), cmd);
 
         if (res.status == ParseStatus::OK) {
-            // Consume the bytes for this command from the read buffer
             conn->consume_read_buf(res.consumed);
+            commands_processed++;
 
-            // Dispatch command through the command table!
             if (ctx_ && !cmd.empty()) {
                 ctx_->command_table.dispatch(*ctx_, cmd, *conn);
             }
+
+            // Guard against Output Buffer Flooding / Slow Reader (AC-LIM-04: 64 MiB max)
+            if (conn->is_output_buf_exceeded()) {
+                log_warn("Output buffer limit exceeded on fd=" + std::to_string(fd) + 
+                         ", disconnecting slow reader to reclaim memory");
+                close_connection(fd);
+                return;
+            }
         } else if (res.status == ParseStatus::NEED_MORE) {
-            // If empty line was parsed, consume spaces
             if (res.consumed > 0) {
                 conn->consume_read_buf(res.consumed);
                 continue;
             }
-            // Incomplete command: leave bytes in read_buf_ and wait for next network packet
-            break;
+            break; // Incomplete command; wait for next network chunk
         } else {
-            // Protocol error: send error message and close connection
+            // Protocol error (e.g. *abc\r\n or invalid lengths)
             conn->append_write("-ERR " + res.error_msg + "\r\n");
             conn->set_close_after_write(true);
             conn->consume_read_buf(conn->read_buf().size());
@@ -215,11 +237,13 @@ void EventLoop::handle_connection_read(int fd) {
         }
     }
 
-    // Flush any pending replies to the socket
+    // 3. Flush pending replies
     conn->write_to_socket(err);
 
     if (conn->has_pending_write()) {
         update_connection_events(fd, EPOLLIN | EPOLLOUT);
+    } else if (conn->close_after_write()) {
+        close_connection(fd);
     }
 }
 void EventLoop::handle_connection_write(int fd) {
@@ -316,8 +340,11 @@ void EventLoop::run() {
         }
     }
 
-    log_info("Event loop stopped. Cleaning up " + std::to_string(connections_.size()) + " connections...");
+      log_info("Event loop stopped. Flushing buffers and cleaning up " + std::to_string(connections_.size()) + " connections...");
+    for (auto& pair : connections_) {
+        std::string write_err;
+        pair.second->write_to_socket(write_err); // Best-effort non-blocking flush
+    }
     connections_.clear();
 }
-
 } // namespace kvforge

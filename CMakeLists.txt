@@ -56,6 +56,7 @@ add_executable(kvforge_tests
     tests/unit/test_store.cpp
     tests/unit/test_int.cpp
     tests/unit/test_expiry.cpp
+    tests/unit/test_limits.cpp
 )
 target_link_libraries(kvforge_tests PRIVATE kvforge_core GTest::gtest_main)
 include(GoogleTest)

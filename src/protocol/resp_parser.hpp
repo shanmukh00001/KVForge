@@ -28,7 +28,7 @@ class RespParser {
 public:
     // Max limits to protect against Denial of Service (DoS) memory exhaustion
     static constexpr size_t MAX_INLINE_LENGTH = 64 * 1024;        // 64 KB
-    static constexpr size_t MAX_BULK_STRING_LENGTH = 512 * 1024 * 1024; // 512 MB (Redis standard)
+    static constexpr size_t MAX_BULK_STRING_LENGTH = 64* 1024 * 1024; //current project limit (prd limit)
     static constexpr size_t MAX_ARRAY_ELEMENTS = 1024 * 1024;    // 1 million elements
 
     // Parses the next command from the buffer [data, data + len]
