@@ -1,0 +1,14 @@
+cat << 'EOF' > .gitignore
+# Build and compile artifacts
+build/
+bin/
+Testing/
+
+# IDE / Editor folders
+.vscode/
+.idea/
+
+# Core dumps / logs
+*.log
+*.core
+EOF
