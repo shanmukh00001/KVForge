@@ -45,7 +45,9 @@ static void do_info(ServerContext& ctx, const Command& /*cmd*/, Connection& conn
     info += "\r\n# Stats\r\n";
     info += "total_commands_processed:" + std::to_string(ctx.total_commands_processed) + "\r\n";
     info += "total_connections_received:" + std::to_string(ctx.total_connections_received) + "\r\n";
-
+    info += "\r\n# Keyspace\r\n";
+    info += "db0:keys=" + std::to_string(ctx.db.size()) + "\r\n";
+    info += "rehashing:" + std::string(ctx.db.is_rehashing() ? "1" : "0") + "\r\n";
     conn.append_write(RespWriter::bulk_string(info));
 }
 

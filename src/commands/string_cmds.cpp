@@ -1,4 +1,5 @@
 #include "commands/command_table.hpp"
+#include "persistence/aof.hpp"
 #include "util/int_parse.hpp"
 #include <algorithm>
 
@@ -13,11 +14,9 @@ static std::string to_upper(std::string_view str) {
     return out;
 }
 
-// Handler: GET key
 static void do_get(ServerContext& ctx, const Command& cmd, Connection& conn) {
     const std::string& key = cmd[1];
 
-    // 1. Lazy expiry check
     if (check_and_expire(ctx, key)) {
         ctx.keyspace_misses++;
         conn.append_write(RespWriter::null_bulk_string());
@@ -34,16 +33,14 @@ static void do_get(ServerContext& ctx, const Command& cmd, Connection& conn) {
     }
 }
 
-// Handler: SET key value [EX seconds] [PX ms] [NX] [XX]
 static void do_set(ServerContext& ctx, const Command& cmd, Connection& conn) {
     const std::string& key = cmd[1];
     const std::string& value = cmd[2];
 
     bool opt_nx = false;
     bool opt_xx = false;
-    int64_t expire_ms = -1; // -1 means no expiry
+    int64_t expire_ms = -1;
 
-    // Parse optional arguments
     for (size_t i = 3; i < cmd.size(); ++i) {
         std::string opt = to_upper(cmd[i]);
         if (opt == "NX") {
@@ -96,32 +93,51 @@ static void do_set(ServerContext& ctx, const Command& cmd, Connection& conn) {
 
     ctx.db.set(key, value);
 
-    // Set or overwrite expiry
     if (expire_ms > 0) {
         uint64_t abs_expire = monotonic_time_ms() + static_cast<uint64_t>(expire_ms);
         ctx.expiry_index.set_expiry(key, abs_expire);
     } else {
-        // Plain SET clears any previous TTL
         ctx.expiry_index.remove_expiry(key);
+    }
+
+    // AOF Persistence: normalize relative EX/PX to absolute PXAT
+    if (ctx.aof) {
+        std::string aof_err;
+        if (expire_ms > 0) {
+            uint64_t abs_wall = wall_clock_time_ms() + static_cast<uint64_t>(expire_ms);
+            ctx.aof->append_record({"SET", key, value, "PXAT", std::to_string(abs_wall)}, aof_err);
+        } else {
+            ctx.aof->append_record({"SET", key, value}, aof_err);
+        }
     }
 
     conn.append_write(RespWriter::simple_string("OK"));
 }
 
-// Handler: DEL key [key ...]
 static void do_del(ServerContext& ctx, const Command& cmd, Connection& conn) {
     int64_t deleted_count = 0;
+    std::vector<std::string> deleted_keys;
+
     for (size_t i = 1; i < cmd.size(); ++i) {
         check_and_expire(ctx, cmd[i]);
         if (ctx.db.del(cmd[i])) {
-            ctx.expiry_index.remove_expiry(cmd[i]); // Clean up expiry index!
+            ctx.expiry_index.remove_expiry(cmd[i]);
             deleted_count++;
+            deleted_keys.push_back(cmd[i]);
         }
     }
+
+    // AOF Persistence: only record keys that actually existed
+    if (deleted_count > 0 && ctx.aof) {
+        std::string aof_err;
+        std::vector<std::string> aof_cmd = {"DEL"};
+        aof_cmd.insert(aof_cmd.end(), deleted_keys.begin(), deleted_keys.end());
+        ctx.aof->append_record(aof_cmd, aof_err);
+    }
+
     conn.append_write(RespWriter::integer(deleted_count));
 }
 
-// Handler: EXISTS key [key ...]
 static void do_exists(ServerContext& ctx, const Command& cmd, Connection& conn) {
     int64_t exists_count = 0;
     for (size_t i = 1; i < cmd.size(); ++i) {
@@ -134,7 +150,6 @@ static void do_exists(ServerContext& ctx, const Command& cmd, Connection& conn) 
     conn.append_write(RespWriter::integer(exists_count));
 }
 
-// Handler: MSET key value [key value ...]
 static void do_mset(ServerContext& ctx, const Command& cmd, Connection& conn) {
     size_t args_count = cmd.size() - 1;
     if (args_count % 2 != 0) {
@@ -144,13 +159,17 @@ static void do_mset(ServerContext& ctx, const Command& cmd, Connection& conn) {
 
     for (size_t i = 1; i < cmd.size(); i += 2) {
         ctx.db.set(cmd[i], cmd[i + 1]);
-        ctx.expiry_index.remove_expiry(cmd[i]); // MSET clears TTL per Redis spec
+        ctx.expiry_index.remove_expiry(cmd[i]);
+    }
+
+    if (ctx.aof) {
+        std::string aof_err;
+        ctx.aof->append_record(cmd, aof_err);
     }
 
     conn.append_write(RespWriter::simple_string("OK"));
 }
 
-// Handler: MGET key [key ...]
 static void do_mget(ServerContext& ctx, const Command& cmd, Connection& conn) {
     size_t count = cmd.size() - 1;
     conn.append_write(RespWriter::array_header(count));
@@ -172,20 +191,23 @@ static void do_mget(ServerContext& ctx, const Command& cmd, Connection& conn) {
     }
 }
 
-// Handler: DBSIZE
 static void do_dbsize(ServerContext& ctx, const Command& /*cmd*/, Connection& conn) {
     conn.append_write(RespWriter::integer(static_cast<int64_t>(ctx.db.size())));
 }
 
-// Handler: FLUSHALL
 static void do_flushall(ServerContext& ctx, const Command& /*cmd*/, Connection& conn) {
     ctx.db.clear();
     ctx.expiry_index.clear();
+
+    if (ctx.aof) {
+        std::string aof_err;
+        ctx.aof->append_record({"FLUSHALL"}, aof_err);
+    }
+
     conn.append_write(RespWriter::simple_string("OK"));
 }
 
-// Common helper for INCR, DECR, INCRBY, DECRBY
-static void apply_incr_by(ServerContext& ctx, const std::string& key, int64_t delta, Connection& conn) {
+static void apply_incr_by(ServerContext& ctx, const std::string& key, int64_t delta, const Command& cmd, Connection& conn) {
     check_and_expire(ctx, key);
     DictEntry* entry = ctx.db.find(key);
     int64_t current_val = 0;
@@ -206,30 +228,32 @@ static void apply_incr_by(ServerContext& ctx, const std::string& key, int64_t de
     }
 
     ctx.db.set(key, std::to_string(result));
+
+    if (ctx.aof) {
+        std::string aof_err;
+        ctx.aof->append_record(cmd, aof_err);
+    }
+
     conn.append_write(RespWriter::integer(result));
 }
 
-// Handler: INCR key
 static void do_incr(ServerContext& ctx, const Command& cmd, Connection& conn) {
-    apply_incr_by(ctx, cmd[1], 1, conn);
+    apply_incr_by(ctx, cmd[1], 1, cmd, conn);
 }
 
-// Handler: DECR key
 static void do_decr(ServerContext& ctx, const Command& cmd, Connection& conn) {
-    apply_incr_by(ctx, cmd[1], -1, conn);
+    apply_incr_by(ctx, cmd[1], -1, cmd, conn);
 }
 
-// Handler: INCRBY key increment
 static void do_incrby(ServerContext& ctx, const Command& cmd, Connection& conn) {
     int64_t delta = 0;
     if (!parse_int64(cmd[2], delta)) {
         conn.append_write(RespWriter::error("ERR value is not an integer or out of range"));
         return;
     }
-    apply_incr_by(ctx, cmd[1], delta, conn);
+    apply_incr_by(ctx, cmd[1], delta, cmd, conn);
 }
 
-// Handler: DECRBY key decrement
 static void do_decrby(ServerContext& ctx, const Command& cmd, Connection& conn) {
     int64_t delta = 0;
     if (!parse_int64(cmd[2], delta)) {
@@ -240,7 +264,7 @@ static void do_decrby(ServerContext& ctx, const Command& cmd, Connection& conn) 
         conn.append_write(RespWriter::error("ERR increment or decrement would overflow"));
         return;
     }
-    apply_incr_by(ctx, cmd[1], -delta, conn);
+    apply_incr_by(ctx, cmd[1], -delta, cmd, conn);
 }
 
 void register_string_commands(CommandTable& table) {

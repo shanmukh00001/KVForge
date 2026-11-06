@@ -336,6 +336,10 @@ void EventLoop::run() {
             for (const auto& key : expired) {
                 ctx_->db.del(key);
                 ctx_->expired_keys++;
+                if (ctx_->aof) {
+                    std::string aof_err;
+                    ctx_->aof->append_record({"DEL", key}, aof_err);
+                }
             }
         }
     }
@@ -346,5 +350,28 @@ void EventLoop::run() {
         pair.second->write_to_socket(write_err); // Best-effort non-blocking flush
     }
     connections_.clear();
+
+    if (ctx_ && ctx_->aof) {
+        std::string sync_err;
+        ctx_->aof->sync(sync_err);
+        ctx_->aof->close();
+    }
+
+
+            // 4. Idle Incremental Rehashing (migrates up to 100 buckets per iteration if rehashing)
+        if (ctx_ && ctx_->db.is_rehashing()) {
+            ctx_->db.rehash_step(100);
+        }
+
+        // 5. Periodic AOF everysec fsync
+        if (ctx_ && ctx_->aof && ctx_->aof->policy() == FsyncPolicy::EVERYSEC) {
+            static uint64_t last_fsync_ms = 0;
+            uint64_t now_m = monotonic_time_ms();
+            if (now_m - last_fsync_ms >= 1000) {
+                std::string sync_err;
+                ctx_->aof->sync(sync_err);
+                last_fsync_ms = now_m;
+            }
+        }
 }
 } // namespace kvforge

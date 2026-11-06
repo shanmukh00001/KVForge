@@ -13,12 +13,12 @@ public:
     explicit HashTable(size_t initial_size = 16);
     ~HashTable();
 
-    // Disable copy (we manage raw pointers in buckets!)
+    // Disable copy
     HashTable(const HashTable&) = delete;
     HashTable& operator=(const HashTable&) = delete;
 
     // Look up a key. Returns pointer to DictEntry, or nullptr if missing.
-    DictEntry* find(std::string_view key) const;
+    DictEntry* find(std::string_view key);
 
     // Insert or update a key.
     // Returns true if new key was inserted, false if existing key was updated.
@@ -27,24 +27,40 @@ public:
     // Delete a key. Returns true if key was deleted, false if key was not found.
     bool del(std::string_view key);
 
-    // Number of active keys in the table
-    size_t size() const { return count_; }
+    // Number of active keys across both tables
+    size_t size() const { return t0_.used + t1_.used; }
 
-    // Number of buckets currently allocated
-    size_t bucket_count() const { return mask_ + 1; }
+    // Total buckets allocated across both tables
+    size_t bucket_count() const { 
+        return (t0_.mask + 1) + (is_rehashing() ? (t1_.mask + 1) : 0); 
+    }
 
-    // Clear all entries from the table
+    // Is the table currently undergoing incremental rehashing?
+    bool is_rehashing() const { return rehash_idx_ != -1; }
+
+    // Perform up to max_buckets steps of incremental rehashing.
+    // Returns true if there is still more rehashing left to do, false if rehash finished or idle.
+    bool rehash_step(size_t max_buckets = 1);
+
+    // Clear all entries from both tables
     void clear();
 
-    // Seeded 64-bit MurmurHash2 function
+    // 64-bit FNV-1a Hash
     static uint64_t hash_key(std::string_view key);
 
 private:
-    void resize_if_needed();
+    struct Table {
+        std::vector<DictEntry*> buckets;
+        size_t used = 0;
+        size_t mask = 0;
+    };
 
-    std::vector<DictEntry*> buckets_; // Array of bucket head pointers
-    size_t count_ = 0;                // Number of stored keys
-    size_t mask_ = 0;                 // bucket_count - 1 (for fast bitwise AND indexing)
+    void start_rehash(size_t new_size);
+    void check_grow();
+
+    Table t0_;                  // Primary table
+    Table t1_;                  // Rehashing target table
+    ptrdiff_t rehash_idx_ = -1; // -1 = inactive; >= 0 is current bucket in t0 being migrated
 };
 
 } // namespace kvforge

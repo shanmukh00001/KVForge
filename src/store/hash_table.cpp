@@ -1,9 +1,9 @@
 #include "store/hash_table.hpp"
+#include <algorithm>
 
 namespace kvforge {
 
-// Seeded 64-bit FNV-1a Hash Algorithm:
-// Extremely fast, produces excellent uniform distribution across buckets
+// 64-bit FNV-1a Hash Algorithm
 uint64_t HashTable::hash_key(std::string_view key) {
     const uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
     const uint64_t FNV_PRIME = 1099511628211ULL;
@@ -17,15 +17,15 @@ uint64_t HashTable::hash_key(std::string_view key) {
 }
 
 HashTable::HashTable(size_t initial_size) {
-    // Ensure initial_size is at least 4, and is a power of 2
     size_t size = 16;
     while (size < initial_size) {
         size *= 2;
     }
 
-    buckets_.resize(size, nullptr);
-    mask_ = size - 1;
-    count_ = 0;
+    t0_.buckets.assign(size, nullptr);
+    t0_.mask = size - 1;
+    t0_.used = 0;
+    rehash_idx_ = -1; // Not rehashing initially
 }
 
 HashTable::~HashTable() {
@@ -33,126 +33,244 @@ HashTable::~HashTable() {
 }
 
 void HashTable::clear() {
-    // Traverse every bucket and delete all nodes in each linked list
-    for (size_t i = 0; i < buckets_.size(); ++i) {
-        DictEntry* current = buckets_[i];
+    // Delete all nodes in t0
+    for (size_t i = 0; i < t0_.buckets.size(); ++i) {
+        DictEntry* current = t0_.buckets[i];
         while (current != nullptr) {
             DictEntry* next = current->next;
-            delete current; // Free heap memory
+            delete current;
             current = next;
         }
-        buckets_[i] = nullptr;
+        t0_.buckets[i] = nullptr;
     }
-    count_ = 0;
-}
+    t0_.used = 0;
 
-DictEntry* HashTable::find(std::string_view key) const {
-    if (count_ == 0) return nullptr;
-
-    // 1. Calculate bucket index using fast bitwise AND
-    uint64_t h = hash_key(key);
-    size_t idx = h & mask_;
-
-    // 2. Walk the linked list in this bucket
-    DictEntry* entry = buckets_[idx];
-    while (entry != nullptr) {
-        if (entry->key == key) {
-            return entry; // Found!
+    // Delete all nodes in t1 (if rehash was in progress)
+    for (size_t i = 0; i < t1_.buckets.size(); ++i) {
+        DictEntry* current = t1_.buckets[i];
+        while (current != nullptr) {
+            DictEntry* next = current->next;
+            delete current;
+            current = next;
         }
-        entry = entry->next;
+        t1_.buckets[i] = nullptr;
     }
+    t1_.buckets.clear();
+    t1_.used = 0;
+    t1_.mask = 0;
 
-    return nullptr; // Not found
+    rehash_idx_ = -1;
 }
 
-bool HashTable::set(std::string key, std::string value) {
-    // Check if table needs to grow before inserting
-    resize_if_needed();
+void HashTable::start_rehash(size_t new_size) {
+    size_t size = 16;
+    while (size < new_size) {
+        size *= 2;
+    }
 
-    uint64_t h = hash_key(key);
-    size_t idx = h & mask_;
+    t1_.buckets.assign(size, nullptr);
+    t1_.mask = size - 1;
+    t1_.used = 0;
+    rehash_idx_ = 0; // Begin migrating from bucket 0 of t0
+}
 
-    // 1. Check if the key already exists in this bucket
-    DictEntry* entry = buckets_[idx];
-    while (entry != nullptr) {
-        if (entry->key == key) {
-            entry->value = std::move(value); // Update existing value
-            return false; // Existing key updated
+void HashTable::check_grow() {
+    if (is_rehashing()) return;
+
+    // Trigger growth when load factor reaches 1.0
+    if (t0_.used >= t0_.buckets.size()) {
+        start_rehash(t0_.buckets.size() * 2);
+    }
+}
+
+bool HashTable::rehash_step(size_t max_buckets) {
+    if (!is_rehashing()) return false;
+
+    // Guard against scanning millions of consecutive empty buckets in one go
+    size_t empty_visits = max_buckets * 10;
+
+    while (max_buckets > 0 && static_cast<size_t>(rehash_idx_) < t0_.buckets.size() && empty_visits > 0) {
+        DictEntry* entry = t0_.buckets[rehash_idx_];
+
+        if (entry == nullptr) {
+            rehash_idx_++;
+            empty_visits--;
+            continue;
         }
-        entry = entry->next;
-    }
 
-    // 2. Key does not exist: create a new entry
-    DictEntry* new_entry = new DictEntry(std::move(key), std::move(value));
-
-    // Insert at the HEAD of the bucket linked list (fastest: O(1))
-    new_entry->next = buckets_[idx];
-    buckets_[idx] = new_entry;
-    count_++;
-
-    return true; // New key inserted
-}
-
-bool HashTable::del(std::string_view key) {
-    if (count_ == 0) return false;
-
-    uint64_t h = hash_key(key);
-    size_t idx = h & mask_;
-
-    DictEntry* entry = buckets_[idx];
-    DictEntry* prev = nullptr;
-
-    while (entry != nullptr) {
-        if (entry->key == key) {
-            // Unlink entry from the chain
-            if (prev == nullptr) {
-                // Entry was the head of the list
-                buckets_[idx] = entry->next;
-            } else {
-                // Entry was in the middle or end
-                prev->next = entry->next;
-            }
-
-            delete entry; // Free memory!
-            count_--;
-            return true;
-        }
-        prev = entry;
-        entry = entry->next;
-    }
-
-    return false; // Key not found
-}
-
-void HashTable::resize_if_needed() {
-    // Resize when load factor reaches 1.0 (count_ >= bucket_count)
-    if (count_ < buckets_.size()) {
-        return;
-    }
-
-    size_t new_size = buckets_.size() * 2;
-    std::vector<DictEntry*> new_buckets(new_size, nullptr);
-    size_t new_mask = new_size - 1;
-
-    // Migrate all entries to the new bucket array
-    for (size_t i = 0; i < buckets_.size(); ++i) {
-        DictEntry* entry = buckets_[i];
+        // Migrate every entry in this bucket chain over to t1
         while (entry != nullptr) {
             DictEntry* next = entry->next;
 
-            // Recalculate index in the new larger bucket array
-            size_t new_idx = hash_key(entry->key) & new_mask;
+            // Calculate index in new table t1 using its bitmask
+            size_t new_idx = hash_key(entry->key) & t1_.mask;
 
-            // Insert at the head of the new bucket
-            entry->next = new_buckets[new_idx];
-            new_buckets[new_idx] = entry;
+            // Link at the head of t1's bucket
+            entry->next = t1_.buckets[new_idx];
+            t1_.buckets[new_idx] = entry;
 
+            t0_.used--;
+            t1_.used++;
             entry = next;
+        }
+
+        t0_.buckets[rehash_idx_] = nullptr;
+        rehash_idx_++;
+        max_buckets--;
+    }
+
+    // Check if t0 is completely empty and migration is finished
+    if (static_cast<size_t>(rehash_idx_) >= t0_.buckets.size()) {
+        t0_ = std::move(t1_);
+        t1_ = Table{};
+        rehash_idx_ = -1; // Finished!
+        return false;
+    }
+
+    return true; // Still more rehashing to do
+}
+
+DictEntry* HashTable::find(std::string_view key) {
+    if (size() == 0) return nullptr;
+
+    // Step 1 bucket forward if rehashing
+    if (is_rehashing()) {
+        rehash_step(1);
+    }
+
+    uint64_t h = hash_key(key);
+
+    // 1. Search primary table t0
+    if (!t0_.buckets.empty()) {
+        size_t idx0 = h & t0_.mask;
+        DictEntry* entry = t0_.buckets[idx0];
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                return entry;
+            }
+            entry = entry->next;
         }
     }
 
-    buckets_ = std::move(new_buckets);
-    mask_ = new_mask;
+    // 2. If rehashing, search target table t1
+    if (is_rehashing() && !t1_.buckets.empty()) {
+        size_t idx1 = h & t1_.mask;
+        DictEntry* entry = t1_.buckets[idx1];
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                return entry;
+            }
+            entry = entry->next;
+        }
+    }
+
+    return nullptr;
+}
+
+bool HashTable::set(std::string key, std::string value) {
+    if (is_rehashing()) {
+        rehash_step(1);
+    }
+
+    uint64_t h = hash_key(key);
+
+    // 1. Check if the key already exists in t0
+    if (!t0_.buckets.empty()) {
+        size_t idx0 = h & t0_.mask;
+        DictEntry* entry = t0_.buckets[idx0];
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                entry->value = std::move(value);
+                return false; // Updated existing key
+            }
+            entry = entry->next;
+        }
+    }
+
+    // 2. Check if the key already exists in t1 (if rehashing)
+    if (is_rehashing() && !t1_.buckets.empty()) {
+        size_t idx1 = h & t1_.mask;
+        DictEntry* entry = t1_.buckets[idx1];
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                entry->value = std::move(value);
+                return false; // Updated existing key
+            }
+            entry = entry->next;
+        }
+    }
+
+    // 3. Brand new key: check if we need to start rehashing
+    check_grow();
+
+    // If rehashing, always insert into t1; otherwise insert into t0
+    Table& target = is_rehashing() ? t1_ : t0_;
+    size_t idx = h & target.mask;
+
+    DictEntry* new_entry = new DictEntry(std::move(key), std::move(value));
+    new_entry->next = target.buckets[idx];
+    target.buckets[idx] = new_entry;
+    target.used++;
+
+    return true; // Inserted new key
+}
+
+bool HashTable::del(std::string_view key) {
+    if (size() == 0) return false;
+
+    if (is_rehashing()) {
+        rehash_step(1);
+    }
+
+    uint64_t h = hash_key(key);
+
+    // 1. Search and delete from t0
+    if (!t0_.buckets.empty()) {
+        size_t idx0 = h & t0_.mask;
+        DictEntry* entry = t0_.buckets[idx0];
+        DictEntry* prev = nullptr;
+
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                if (prev == nullptr) {
+                    t0_.buckets[idx0] = entry->next;
+                } else {
+                    prev->next = entry->next;
+                }
+                delete entry;
+                t0_.used--;
+                return true;
+            }
+            prev = entry;
+            entry = entry->next;
+        }
+    }
+
+    // 2. Search and delete from t1 (if rehashing)
+    if (is_rehashing() && !t1_.buckets.empty()) {
+        size_t idx1 = h & t1_.mask;
+        DictEntry* entry = t1_.buckets[idx1];
+        DictEntry* prev = nullptr;
+
+        while (entry != nullptr) {
+            if (entry->key == key) {
+                if (prev == nullptr) {
+                    t1_.buckets[idx1] = entry->next;
+                } else {
+                    prev->next = entry->next;
+                }
+                delete entry;
+                t1_.used--;
+                return true;
+            }
+            prev = entry;
+            entry = entry->next;
+        }
+    }
+
+    return false;
 }
 
 } // namespace kvforge
+
+

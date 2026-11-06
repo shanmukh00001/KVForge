@@ -28,6 +28,7 @@ add_library(kvforge_core
     src/util/int_parse.cpp
     src/expiry/expiry_index.cpp
     src/commands/key_cmds.cpp
+    src/persistence/aof.cpp
     )
 
 # Main executable target
@@ -57,6 +58,8 @@ add_executable(kvforge_tests
     tests/unit/test_int.cpp
     tests/unit/test_expiry.cpp
     tests/unit/test_limits.cpp
+    tests/unit/test_rehash.cpp
+    tests/unit/test_aof.cpp
 )
 target_link_libraries(kvforge_tests PRIVATE kvforge_core GTest::gtest_main)
 include(GoogleTest)
