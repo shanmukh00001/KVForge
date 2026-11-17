@@ -1,14 +1,19 @@
-cat << 'EOF' > .gitignore
 # Build and compile artifacts
 build/
+build_*/
 bin/
 Testing/
+
+# Persisted state and logs
+*.aof
+*.log
+*.core
+
+# Python cache
+__pycache__/
+*.pyc
 
 # IDE / Editor folders
 .vscode/
 .idea/
-
-# Core dumps / logs
-*.log
-*.core
-EOF
+.cph/

@@ -39,6 +39,7 @@ static void do_set(ServerContext& ctx, const Command& cmd, Connection& conn) {
 
     bool opt_nx = false;
     bool opt_xx = false;
+    bool has_expiry = false;
     int64_t expire_ms = -1;
 
     for (size_t i = 3; i < cmd.size(); ++i) {
@@ -48,22 +49,35 @@ static void do_set(ServerContext& ctx, const Command& cmd, Connection& conn) {
         } else if (opt == "XX") {
             opt_xx = true;
         } else if (opt == "EX") {
-            if (i + 1 >= cmd.size()) {
+            if (has_expiry || i + 1 >= cmd.size()) {
                 conn.append_write(RespWriter::error("ERR syntax error"));
                 return;
             }
+            has_expiry = true;
             int64_t sec = 0;
-            if (!parse_int64(cmd[++i], sec) || sec <= 0) {
+            if (!parse_int64(cmd[++i], sec) || sec <= 0 || sec > INT64_MAX / 1000) {
                 conn.append_write(RespWriter::error("ERR invalid expire time in 'set' command"));
                 return;
             }
-            expire_ms = sec * 1000;
+            int64_t ms = sec * 1000;
+            int64_t dummy = 0;
+            if (!safe_add(static_cast<int64_t>(wall_clock_time_ms()), ms, dummy)) {
+                conn.append_write(RespWriter::error("ERR invalid expire time in 'set' command"));
+                return;
+            }
+            expire_ms = ms;
         } else if (opt == "PX") {
-            if (i + 1 >= cmd.size()) {
+            if (has_expiry || i + 1 >= cmd.size()) {
                 conn.append_write(RespWriter::error("ERR syntax error"));
                 return;
             }
+            has_expiry = true;
             if (!parse_int64(cmd[++i], expire_ms) || expire_ms <= 0) {
+                conn.append_write(RespWriter::error("ERR invalid expire time in 'set' command"));
+                return;
+            }
+            int64_t dummy = 0;
+            if (!safe_add(static_cast<int64_t>(wall_clock_time_ms()), expire_ms, dummy)) {
                 conn.append_write(RespWriter::error("ERR invalid expire time in 'set' command"));
                 return;
             }
@@ -195,7 +209,19 @@ static void do_dbsize(ServerContext& ctx, const Command& /*cmd*/, Connection& co
     conn.append_write(RespWriter::integer(static_cast<int64_t>(ctx.db.size())));
 }
 
-static void do_flushall(ServerContext& ctx, const Command& /*cmd*/, Connection& conn) {
+static void do_flushall(ServerContext& ctx, const Command& cmd, Connection& conn) {
+    if (cmd.size() == 2) {
+        std::string mode = cmd[1];
+        for (char& c : mode) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+        if (mode != "async" && mode != "sync") {
+            conn.append_write(RespWriter::error("ERR syntax error"));
+            return;
+        }
+    } else if (cmd.size() > 2) {
+        conn.append_write(RespWriter::error("ERR syntax error"));
+        return;
+    }
+
     ctx.db.clear();
     ctx.expiry_index.clear();
 
@@ -275,7 +301,7 @@ void register_string_commands(CommandTable& table) {
     table.register_command({"MSET", -3, do_mset, true});
     table.register_command({"MGET", -2, do_mget, false});
     table.register_command({"DBSIZE", 1, do_dbsize, false});
-    table.register_command({"FLUSHALL", 1, do_flushall, true});
+    table.register_command({"FLUSHALL", -1, do_flushall, true});
 
     table.register_command({"INCR", 2, do_incr, true});
     table.register_command({"DECR", 2, do_decr, true});

@@ -46,10 +46,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    kvforge::log_info("KVForge v0.1.0 starting");
+    kvforge::log_info("KVForge v0.2.0 starting");
 
     // 1. Initialize Server Context & Command Table
     kvforge::ServerContext ctx;
+    ctx.tcp_port = config.port;
+    ctx.max_clients = config.max_clients;
+    ctx.aof_fsync_policy = config.appendfsync;
     ctx.start_time_sec = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()

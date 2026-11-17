@@ -6,7 +6,7 @@
 
 namespace kvforge {
 
-void print_version() { std::cout << "kvforge 0.1.0\n"; }
+void print_version() { std::cout << "kvforge 0.2.0\n"; }
 
 void print_help() {
   std::cout

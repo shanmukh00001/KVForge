@@ -271,6 +271,58 @@ bool HashTable::del(std::string_view key) {
     return false;
 }
 
+
+std::vector<std::string> HashTable::all_keys() const {
+    std::vector<std::string> keys;
+    keys.reserve(size());
+
+    // 1. Collect from primary table t0
+    for (size_t i = 0; i < t0_.buckets.size(); ++i) {
+        DictEntry* entry = t0_.buckets[i];
+        while (entry != nullptr) {
+            keys.push_back(entry->key);
+            entry = entry->next;
+        }
+    }
+
+    // 2. If rehashing, collect from target table t1
+    if (is_rehashing()) {
+        for (size_t i = 0; i < t1_.buckets.size(); ++i) {
+            DictEntry* entry = t1_.buckets[i];
+            while (entry != nullptr) {
+                keys.push_back(entry->key);
+                entry = entry->next;
+            }
+        }
+    }
+
+    return keys;
+}
+
+size_t HashTable::approx_memory_usage() const {
+    size_t mem = sizeof(HashTable);
+    mem += t0_.buckets.capacity() * sizeof(DictEntry*);
+    mem += t1_.buckets.capacity() * sizeof(DictEntry*);
+
+    for (size_t i = 0; i < t0_.buckets.size(); ++i) {
+        DictEntry* e = t0_.buckets[i];
+        while (e != nullptr) {
+            mem += sizeof(DictEntry) + e->key.capacity() + e->value.capacity();
+            e = e->next;
+        }
+    }
+
+    if (is_rehashing()) {
+        for (size_t i = 0; i < t1_.buckets.size(); ++i) {
+            DictEntry* e = t1_.buckets[i];
+            while (e != nullptr) {
+                mem += sizeof(DictEntry) + e->key.capacity() + e->value.capacity();
+                e = e->next;
+            }
+        }
+    }
+
+    return mem;
+}
+
 } // namespace kvforge
-
-

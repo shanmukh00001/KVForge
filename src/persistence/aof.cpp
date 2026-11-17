@@ -216,7 +216,8 @@ static bool replay_command(ServerContext& ctx, const Command& cmd, std::string& 
         return true;
     }
 
-    return true;
+    err = "Unknown or unsupported AOF command: " + name;
+    return false;
 }
 
 bool AOF::load_and_replay(const std::string& filename, ServerContext& ctx, std::string& out_err) {
@@ -262,6 +263,11 @@ bool AOF::load_and_replay(const std::string& filename, ServerContext& ctx, std::
     size_t last_good = 0;
 
     while (pos < file_size) {
+        if (buf[pos] != '*') {
+            out_err = "Corrupt AOF syntax at offset " + std::to_string(pos) + ": record must start with '*'";
+            ::close(fd);
+            return false;
+        }
         Command cmd;
         ParseResult res = RespParser::parse(buf.data() + pos, file_size - pos, cmd);
 

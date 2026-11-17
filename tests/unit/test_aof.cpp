@@ -155,3 +155,109 @@ TEST_F(AOFTest, ACAOF07_LazyExpiryAppendsDEL) {
     ASSERT_TRUE(AOF::load_and_replay(test_file_, fresh_ctx, err));
     EXPECT_EQ(fresh_ctx.db.find("temp_key"), nullptr);
 }
+
+// Extended AOF coverage: policy parsing, multi-command replay, edge cases
+TEST_F(AOFTest, ExtendedAOFReplayAndPolicyCoverage) {
+    // 1. Policy parsing
+    EXPECT_EQ(AOF::parse_policy("always"), FsyncPolicy::ALWAYS);
+    EXPECT_EQ(AOF::parse_policy("no"), FsyncPolicy::NO);
+    EXPECT_EQ(AOF::parse_policy("everysec"), FsyncPolicy::EVERYSEC);
+    EXPECT_EQ(AOF::parse_policy("unknown_defaults_to_everysec"), FsyncPolicy::EVERYSEC);
+
+    // 2. Replay non-existent file returns true (clean state)
+    ServerContext ctx;
+    std::string err;
+    EXPECT_TRUE(AOF::load_and_replay("non_existent_file.aof", ctx, err));
+
+    // 3. Replay 0-byte file returns true
+    ::unlink(test_file_.c_str());
+    {
+        int fd = ::open(test_file_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        ::close(fd);
+    }
+    EXPECT_TRUE(AOF::load_and_replay(test_file_, ctx, err));
+
+    // 4. Replay PEXPIREAT, PERSIST, INCRBY, DECRBY, MSET, FLUSHALL
+    ::unlink(test_file_.c_str());
+    {
+        AOF aof(test_file_, FsyncPolicy::ALWAYS);
+        ASSERT_TRUE(aof.open_file(err));
+        uint64_t future_wall = wall_clock_time_ms() + 100000;
+        EXPECT_TRUE(aof.append_record({"SET", "k_persist", "v1"}, err));
+        EXPECT_TRUE(aof.append_record({"PEXPIREAT", "k_persist", std::to_string(future_wall)}, err));
+        EXPECT_TRUE(aof.append_record({"PERSIST", "k_persist"}, err));
+
+        EXPECT_TRUE(aof.append_record({"SET", "num", "10"}, err));
+        EXPECT_TRUE(aof.append_record({"INCRBY", "num", "5"}, err));
+        EXPECT_TRUE(aof.append_record({"DECRBY", "num", "3"}, err));
+
+        EXPECT_TRUE(aof.append_record({"MSET", "m1", "val1", "m2", "val2"}, err));
+        EXPECT_TRUE(aof.append_record({"FLUSHALL"}, err));
+        EXPECT_TRUE(aof.append_record({"SET", "survivor", "alive"}, err));
+        aof.close();
+    }
+
+    ServerContext replay_ctx;
+    ASSERT_TRUE(AOF::load_and_replay(test_file_, replay_ctx, err));
+    EXPECT_EQ(replay_ctx.db.size(), 1u);
+    ASSERT_NE(replay_ctx.db.find("survivor"), nullptr);
+    EXPECT_EQ(replay_ctx.db.find("survivor")->value, "alive");
+
+    // 5. Append with EVERYSEC policy (hits return true)
+    ::unlink(test_file_.c_str());
+    {
+        AOF aof_sec(test_file_, FsyncPolicy::EVERYSEC);
+        ASSERT_TRUE(aof_sec.open_file(err));
+        EXPECT_TRUE(aof_sec.append_record({"SET", "k_sec", "v_sec"}, err));
+        aof_sec.close();
+    }
+
+    // 6. Replay PEXPIREAT with past timestamp (deletes key)
+    ::unlink(test_file_.c_str());
+    {
+        AOF aof(test_file_, FsyncPolicy::ALWAYS);
+        ASSERT_TRUE(aof.open_file(err));
+        EXPECT_TRUE(aof.append_record({"SET", "k_past", "val"}, err));
+        EXPECT_TRUE(aof.append_record({"PEXPIREAT", "k_past", "1000"}, err)); // past timestamp
+        aof.close();
+    }
+    ServerContext past_ctx;
+    ASSERT_TRUE(AOF::load_and_replay(test_file_, past_ctx, err));
+    EXPECT_EQ(past_ctx.db.find("k_past"), nullptr);
+
+    // 7. Replay INCR on non-integer string (returns corrupt error)
+    ::unlink(test_file_.c_str());
+    {
+        AOF aof(test_file_, FsyncPolicy::ALWAYS);
+        ASSERT_TRUE(aof.open_file(err));
+        EXPECT_TRUE(aof.append_record({"SET", "k_str", "not_a_num"}, err));
+        EXPECT_TRUE(aof.append_record({"INCR", "k_str"}, err));
+        aof.close();
+    }
+    ServerContext bad_incr_ctx;
+    EXPECT_FALSE(AOF::load_and_replay(test_file_, bad_incr_ctx, err));
+
+    // 8. Replay INCR overflow (returns overflow error)
+    ::unlink(test_file_.c_str());
+    {
+        AOF aof(test_file_, FsyncPolicy::ALWAYS);
+        ASSERT_TRUE(aof.open_file(err));
+        EXPECT_TRUE(aof.append_record({"SET", "k_over", "9223372036854775807"}, err));
+        EXPECT_TRUE(aof.append_record({"INCR", "k_over"}, err));
+        aof.close();
+    }
+    ServerContext overflow_ctx;
+    EXPECT_FALSE(AOF::load_and_replay(test_file_, overflow_ctx, err));
+
+    // 9. Corrupt record start (does not start with '*')
+    ::unlink(test_file_.c_str());
+    {
+        int fd = ::open(test_file_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        std::string bad_hdr = "NOT_AN_AOF_RECORD\r\n";
+        ssize_t w = ::write(fd, bad_hdr.data(), bad_hdr.size());
+        (void)w;
+        ::close(fd);
+    }
+    ServerContext corrupt_ctx;
+    EXPECT_FALSE(AOF::load_and_replay(test_file_, corrupt_ctx, err));
+}

@@ -100,11 +100,17 @@ Format: Context → Decision → Alternatives considered → Consequences. Statu
 **Alternatives.** Custom allocator wrapper or `jemalloc` stats (accurate, more dependency and code).
 **Consequences.** `used_memory` is indicative only; benchmark reports include RSS. Required for Tier 3 option B (LRU) only as an approximation.
 
-## ADR-014 Incremental, resumable RESP parser with hard limits
-**Context.** TCP is a byte stream; packet boundaries are arbitrary and clients are untrusted.
-**Decision.** Parse directly from the connection's buffer with explicit `NeedMore`, `Ok`, `Error` results; no recursion; limits enforced before allocation; allocation proportional to bytes actually received.
-**Alternatives.** Blocking read until a whole command arrives (breaks the event loop); a parser generator (extra dependency, harder to fuzz and control).
-**Consequences.** Robust under split and pipelined input; requires thorough fuzzing and byte-at-a-time tests.
+## ADR-014 Incremental, resumable RESP parser with hard resource limits
+**Context.** TCP is a byte stream; packet boundaries are arbitrary and clients are untrusted. Malicious or misbehaved clients could monopolize the event loop or trigger out-of-memory conditions with unbounded input.
+**Decision.** Parse directly from the connection's buffer with explicit NeedMore, Ok, Error results; no recursion; limits enforced before allocation:
+- Max inline command length: 64 KB (kMaxInlineLength)
+- Max bulk string length: 512 MB (kMaxBulkLength)
+- Max connection buffer size: 10 MB (kMaxBufferSize)
+- Max concurrent client connections: 10,000 (kMaxClients)
+- Fairness processing cap: 16 commands per client connection per epoll cycle before yielding to other sockets.
+Allocation is strictly proportional to bytes actually received.
+**Alternatives.** Blocking read until a whole command arrives (breaks the event loop); a parser generator (extra dependency, harder to fuzz and control); unbounded buffers (DoS vulnerability).
+**Consequences.** Robust under split and pipelined input; prevents starvation and out-of-memory exhaustion; requires thorough fuzzing and byte-at-a-time tests.
 
 ## ADR-015 No external runtime dependencies
 **Context.** Dependencies add build friction and obscure what the code actually does.

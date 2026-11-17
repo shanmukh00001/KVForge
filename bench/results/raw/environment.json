@@ -1,0 +1,11 @@
+{
+  "cpu": "12th Gen Intel(R) Core(TM) i7-1255U",
+  "cores": 12,
+  "ram": "7796 MB",
+  "kernel": "Linux 6.18.33.2-microsoft-standard-WSL2 x86_64 GNU/Linux",
+  "compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cxxflags": "-O3 -DNDEBUG",
+  "redis_version": "7.2.4",
+  "kvforge_version": "0.2.0",
+  "git_commit": "e668c0f"
+}

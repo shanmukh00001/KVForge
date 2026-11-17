@@ -2,6 +2,7 @@
 
 #include "store/entry.hpp"
 #include <vector>
+#include <string>
 #include <string_view>
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +45,12 @@ public:
 
     // Clear all entries from both tables
     void clear();
+
+    // Collect all active keys across both tables
+    std::vector<std::string> all_keys() const;
+
+    // Approximate memory usage of the hash table in bytes
+    size_t approx_memory_usage() const;
 
     // 64-bit FNV-1a Hash
     static uint64_t hash_key(std::string_view key);

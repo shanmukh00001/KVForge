@@ -103,6 +103,7 @@ void EventLoop::close_connection(int fd) {
     // epoll automatically removes closed file descriptors, but calling DEL is good hygiene
     ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
     connections_.erase(fd);
+    if (ctx_ && ctx_->connected_clients > 0) ctx_->connected_clients--;
     log_debug("Closed connection fd=" + std::to_string(fd) + 
               " (active: " + std::to_string(connections_.size()) + ")");
 }
@@ -158,6 +159,7 @@ void EventLoop::handle_listener_event() {
 
         if (ctx_) {
             ctx_->total_connections_received++;
+            ctx_->connected_clients++;
         }
 
         log_debug("Accepted connection from " + client_ip + ":" + std::to_string(client_port) + 

@@ -45,6 +45,10 @@ struct ServerContext {
     uint64_t keyspace_hits = 0;
     uint64_t expired_keys = 0;
     uint64_t keyspace_misses = 0;
+    uint16_t tcp_port = 6380;
+    uint32_t max_clients = 10000;
+    uint32_t connected_clients = 0;
+    std::string aof_fsync_policy = "everysec";
     HashTable db;
     ExpiryIndex expiry_index; 
     CommandTable command_table;

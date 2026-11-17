@@ -1,0 +1,25 @@
+{
+  "excluded_commands": ["INFO", "CONFIG", "COMMAND", "CLIENT", "KEYS"],
+  "error_normalization_rules": [
+    {
+      "pattern": "^ERR unknown command",
+      "action": "match_prefix",
+      "reason": "Redis 7 appends ', with args beginning with:' while KVForge produces standard Redis 6-style unknown command errors."
+    },
+    {
+      "pattern": "^ERR syntax error",
+      "action": "match_prefix",
+      "reason": "Syntax errors in SET options"
+    },
+    {
+      "pattern": "^ERR wrong number of arguments",
+      "action": "match_prefix",
+      "reason": "Arity error message variations"
+    },
+    {
+      "pattern": "^ERR value is not an integer",
+      "action": "match_prefix",
+      "reason": "Integer parsing error messages"
+    }
+  ]
+}

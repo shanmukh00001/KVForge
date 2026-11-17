@@ -8,7 +8,7 @@
 namespace kvforge {
 
 // Forward declarations
-class ServerContext;
+struct ServerContext;
 
 enum class FsyncPolicy {
     ALWAYS,

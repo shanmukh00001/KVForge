@@ -6,17 +6,17 @@ Planning assumptions:
 - Week numbers are relative to the start date. Dates are intentionally not fixed so the plan survives schedule shifts.
 
 ## 1. Milestone overview
-| ID | Milestone | Phases | Est. hours | Target | Release |
-|---|---|---|---|---|---|
-| M0 | Project skeleton and CI | 0 | 3–4 | Week 1, days 1–2 | — |
-| M1 | Server accepts clients | 1 | 5–7 | Week 1, days 3–5 | — |
-| M2 | Protocol and `redis-cli` works | 2, 3 | 8–10 | Week 1 end / Week 2 start | — |
-| M3 | Core data commands | 4, 5 | 7–9 | Week 2 | — |
-| M4 | Expiry and robustness; **Tier 1 complete** | 6, 7 | 8–10 | Week 2 end | **v0.1.0** |
-| M5 | Incremental rehash and AOF | 8, 9 | 10–12 | Week 3 | — |
-| M6 | Verification suites | 10, 11 | 8–10 | Week 4 | — |
-| M7 | Benchmarks and documentation; **Tier 2 complete** | 12 | 6–8 | Week 4 end | **v0.2.0** |
-| M8 | Tier 3 (optional, at most one feature) | — | 8–15 | After v0.2, if time permits | v0.3.0 |
+| ID | Milestone | Phases | Est. hours | Target | Release | Status |
+|---|---|---|---|---|---|---|
+| M0 | Project skeleton and CI | 0 | 3–4 | Week 1, days 1–2 | — | **Completed** |
+| M1 | Server accepts clients | 1 | 5–7 | Week 1, days 3–5 | — | **Completed** |
+| M2 | Protocol and `redis-cli` works | 2, 3 | 8–10 | Week 1 end / Week 2 start | — | **Completed** |
+| M3 | Core data commands | 4, 5 | 7–9 | Week 2 | — | **Completed** |
+| M4 | Expiry and robustness; **Tier 1 complete** | 6, 7 | 8–10 | Week 2 end | **v0.1.0** | **Completed** |
+| M5 | Incremental rehash and AOF | 8, 9 | 10–12 | Week 3 | — | **Completed** |
+| M6 | Verification suites | 10, 11 | 8–10 | Week 4 | — | **Completed** |
+| M7 | Benchmarks and documentation; **Tier 2 complete** | 12 | 6–8 | Week 4 end | **v0.2.0** | **Completed** |
+| M8 | Tier 3 (optional, at most one feature) | — | 8–15 | After v0.2, if time permits | v0.3.0 | *Roadmap* |
 
 ## 2. Milestone details
 
@@ -91,7 +91,7 @@ Apply in this order; each cut must be documented as a known limitation.
 
 ## 5. Risk register
 | ID | Risk | Likelihood | Impact | Mitigation | Trigger |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | R1 | Parser edge cases consume more time than planned | Medium | Medium | Start fuzzing in Phase 2; test every split position | M2 slips by more than 3 days |
 | R2 | `epoll` write-path bugs (stuck replies) | Medium | High | Slow-reader integration test early | Any hang in `redis-benchmark` |
 | R3 | Differential tests reveal many divergences | Medium | Medium | Classify quickly; document intentional differences instead of chasing parity | More than 20 open divergences |

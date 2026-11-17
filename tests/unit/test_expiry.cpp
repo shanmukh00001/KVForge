@@ -70,3 +70,18 @@ TEST(ExpiryIndexTest, StaleEntryPruning) {
     EXPECT_TRUE(idx.remove_expiry("k1"));
     EXPECT_FALSE(idx.next_expiry_time(next_ms)); // Heap is empty of valid keys
 }
+
+// Test 4: Get expiry and clear
+TEST(ExpiryIndexTest, GetExpiryAndClear) {
+    ExpiryIndex idx;
+    uint64_t out_time = 0;
+    EXPECT_FALSE(idx.get_expiry("missing", out_time));
+
+    idx.set_expiry("k1", 3500);
+    EXPECT_TRUE(idx.get_expiry("k1", out_time));
+    EXPECT_EQ(out_time, 3500u);
+
+    idx.clear();
+    EXPECT_EQ(idx.size(), 0u);
+    EXPECT_FALSE(idx.get_expiry("k1", out_time));
+}

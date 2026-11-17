@@ -119,3 +119,39 @@ TEST(RespParserTest, ProtocolErrors) {
     ParseResult r2 = RespParser::parse(bad_dollar.data(), bad_dollar.size(), cmd);
     EXPECT_EQ(r2.status, ParseStatus::ERROR);
 }
+
+// Test 8: Extended protocol edge cases
+TEST(RespParserTest, ExtendedProtocolEdgeCases) {
+    Command cmd;
+    // Empty buffer
+    ParseResult r0 = RespParser::parse("", 0, cmd);
+    EXPECT_EQ(r0.status, ParseStatus::NEED_MORE);
+
+    // Negative array count (null array)
+    std::string null_array = "*-1\r\n";
+    ParseResult r1 = RespParser::parse(null_array.data(), null_array.size(), cmd);
+    EXPECT_EQ(r1.status, ParseStatus::OK);
+    EXPECT_TRUE(cmd.empty());
+
+    // Null bulk string inside array
+    std::string null_bulk = "*2\r\n$3\r\nSET\r\n$-1\r\n";
+    ParseResult r2 = RespParser::parse(null_bulk.data(), null_bulk.size(), cmd);
+    EXPECT_EQ(r2.status, ParseStatus::OK);
+    ASSERT_EQ(cmd.size(), 2u);
+    EXPECT_EQ(cmd[1], "");
+
+    // Invalid bulk length
+    std::string invalid_len = "*1\r\n$abc\r\n";
+    ParseResult r3 = RespParser::parse(invalid_len.data(), invalid_len.size(), cmd);
+    EXPECT_EQ(r3.status, ParseStatus::ERROR);
+
+    // Negative invalid bulk length (not -1)
+    std::string neg_len = "*1\r\n$-2\r\n";
+    ParseResult r4 = RespParser::parse(neg_len.data(), neg_len.size(), cmd);
+    EXPECT_EQ(r4.status, ParseStatus::ERROR);
+
+    // Missing bulk trailing CRLF
+    std::string missing_crlf = "*1\r\n$3\r\nfooXX";
+    ParseResult r5 = RespParser::parse(missing_crlf.data(), missing_crlf.size(), cmd);
+    EXPECT_EQ(r5.status, ParseStatus::ERROR);
+}
